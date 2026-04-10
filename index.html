@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Procedural City Map - Vehicle Navigation | Grafika Komputer Web</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #2C3E50;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Toolbar */
+        .toolbar {
+            background: #2C3E50;
+            color: white;
+            padding: 6px 12px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #1a2632;
+            flex-shrink: 0;
+        }
+
+        .toolbar-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            background: #2C3E50;
+        }
+
+        button, .combo-style {
+            background: #3498DB;
+            border: none;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 12px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-family: inherit;
+        }
+
+        button:hover {
+            background: #2980B9;
+            transform: scale(1.02);
+        }
+
+        .combo-style {
+            background: #34495E;
+            padding: 5px 8px;
+        }
+
+        select, input {
+            background: #34495E;
+            color: white;
+            border: none;
+            padding: 5px 8px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .speed-slider {
+            width: 130px;
+            cursor: pointer;
+            accent-color: #3498DB;
+        }
+
+        .status-bar {
+            background: #1E2A36;
+            color: #AAAAAA;
+            padding: 5px 15px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            flex-shrink: 0;
+            border-top: 1px solid #0f1720;
+        }
+
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            background: #EAE8E3;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        canvas:active {
+            cursor: grabbing;
+        }
+
+        .info-label {
+            background: #2C3E50;
+            color: #F39C12;
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 16px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="toolbar">
+    <div class="toolbar-row">
+        <button id="btnGenerate">🗺️ Generate Map</button>
+        <button id="btnRandomRoute">🎲 Random Route</button>
+        <button id="btnSetStart">📍 Set Start</button>
+        <button id="btnSetGoal">🏁 Set Goal</button>
+        <button id="btnResetColors">🎨 Reset Color</button>
+        <button id="btnZoomIn">➕ Zoom In</button>
+        <button id="btnZoomOut">➖ Zoom Out</button>
+        <button id="btnResetView">🔄 Reset View</button>
+    </div>
+    <div class="toolbar-row">
+        <span>Kendaraan:</span>
+        <select id="vehicleType">
+            <option value="CAR">🚗 Mobil</option>
+            <option value="MOTORCYCLE">🏍️ Motor</option>
+            <option value="BICYCLE">🚲 Sepeda</option>
+            <option value="TRUCK">🚛 Truk</option>
+        </select>
+        <span>Kecepatan:</span>
+        <input type="range" id="speedSlider" min="50" max="350" value="150" step="5" class="speed-slider">
+        <span id="speedValue">150</span>
+        <button id="btnPlayPause">▶️ Start</button>
+        <button id="btnResetAnim">⏹️ Reset</button>
+        <div id="routeInfo" class="info-label">—</div>
+    </div>
+</div>
+
+<div class="canvas-container">
+    <canvas id="mapCanvas"></canvas>
+</div>
+
+<div class="status-bar">
+    <span id="statusMsg">✅ Siap | Drag mouse untuk geser peta | Scroll untuk zoom</span>
+    <span id="coordLabel">📍 —</span>
+</div>
+
+<script>
+    // ============================================================
+    // KONFIGURASI WARNA & ENUM
+    // ============================================================
+    const COLORS = {
+        background: '#EAE8E3',
+        water: '#C8E6F5',
+        park: '#C5E0B4',
+        residential: '#F5F0E0',
+        commercial: '#E8D5C0',
+        industrial: '#D3C5B5',
+        road: '#FFFFFF',
+        road_outline: '#B0B0B0',
+        road_highlight: '#4285F4',
+        node_start: '#EA4335',
+        node_end: '#34A853',
+        vehicle_car: '#1A73E8',
+        vehicle_motorcycle: '#FF6B6B',
+        vehicle_bicycle: '#20B2AA',
+        vehicle_truck: '#8B4513',
+        grid: '#DDDDDD'
+    };
+
+    const ROUTE_COLORS = [
+        '#4285F4', '#EA4335', '#FBBC05', '#34A853', '#9C27B0',
+        '#FF6B6B', '#4ECDC4', '#FF8C42', '#6A0572', '#00B4D8'
+    ];
+
+    const VehicleType = { CAR: "CAR", MOTORCYCLE: "MOTORCYCLE", BICYCLE: "BICYCLE", TRUCK: "TRUCK" };
+    const speedMap = { CAR: 150, MOTORCYCLE: 200, BICYCLE: 80, TRUCK: 100 };
+
+    // ============================================================
+    // STRUKTUR DATA
+    // ============================================================
+    class Point {
+        constructor(x, y) { this.x = x; this.y = y; }
+        distanceTo(other) { return Math.hypot(this.x - other.x, this.y - other.y); }
+    }
+
+    class BezierCurve {
+        constructor(p0, p1, p2, p3) { this.p0 = p0; this.p1 = p1; this.p2 = p2; this.p3 = p3; }
+        
+        pointAt(t) {
+            const mt = 1 - t;
+            const x = mt**3 * this.p0.x + 3*mt**2*t * this.p1.x + 3*mt*t**2 * this.p2.x + t**3 * this.p3.x;
+            const y = mt**3 * this.p0.y + 3*mt**2*t * this.p1.y + 3*mt*t**2 * this.p2.y + t**3 * this.p3.y;
+            return new Point(x, y);
+        }
+        
+        derivativeAt(t) {
+            const mt = 1 - t;
+            const dx = 3*mt**2*(this.p1.x - this.p0.x) + 6*mt*t*(this.p2.x - this.p1.x) + 3*t**2*(this.p3.x - this.p2.x);
+            const dy = 3*mt**2*(this.p1.y - this.p0.y) + 6*mt*t*(this.p2.y - this.p1.y) + 3*t**2*(this.p3.y - this.p2.y);
+            return new Point(dx, dy);
+        }
+        
+        arcLength(samples = 100) {
+            let len = 0;
+            let prev = this.pointAt(0);
+            for (let i = 1; i <= samples; i++) {
+                const curr = this.pointAt(i / samples);
+                len += prev.distanceTo(curr);
+                prev = curr;
+            }
+            return len;
+        }
+        
+        getPoints(steps = 50) {
+            const pts = [];
+            for (let i = 0; i <= steps; i++) pts.push(this.pointAt(i / steps));
+            return pts;
+        }
+    }
+
+    class Road {
+        constructor(id, fromNode, toNode, curve) {
+            this.id = id;
+            this.fromNode = fromNode;
+            this.toNode = toNode;
+            this.curve = curve;
+            this.length = curve.arcLength();
+            this.name = `Jalan ${String.fromCharCode(65 + (id % 26))}${id}`;
+            this.isVisited = false;
+            this.visitedColor = null;
+        }
+    }
+
+    class Node {
+        constructor(id, position, name) { this.id = id; this.position = position; this.name = name; }
+    }
+
+    class Building {
+        constructor(id, center, width, height, buildingType, name) {
+            this.id = id; this.center = center; this.width = width; this.height = height;
+            this.buildingType = buildingType; this.name = name;
+        }
+    }
+
+    // ============================================================
+    // GENERATOR PETA PROSEDURAL
+    // ============================================================
+    class ProceduralMapGenerator {
+        constructor(width = 1800, height = 1800, numNodes = 14) {
+            this.width = width;
+            this.height = height;
+            this.numNodes = numNodes;
+            this.nodes = [];
+            this.roads = [];
+            this.buildings = [];
+            this.adjacency = {};
+        }
+        
+        generate() {
+            this._generateNodes();
+            this._generateRoadNetwork();
+            this._validateConnectivity();
+            this._generateBuildings();
+            return { nodes: this.nodes, roads: this.roads, adjacency: this.adjacency, buildings: this.buildings };
+        }
+        
+        _generateNodes() {
+            this.nodes = [];
+            const centerX = this.width / 2, centerY = this.height / 2;
+            const names = ['Pusat Kota', 'Stasiun', 'Pasar Baru', 'Mall', 'Kampus', 'RS Umum', 'Taman Kota', 'Pelabuhan', 'Terminal', 'Bandara', 'Perumahan', 'Industri', 'Sport Center', 'Gedung Pemerintah'];
+            for (let i = 0; i < this.numNodes; i++) {
+                const angle = Math.random() * 2 * Math.PI;
+                let radius = this._gauss(0.3 * this.width, 0.2 * this.width);
+                radius = Math.max(100, Math.min(this.width * 0.4, Math.abs(radius)));
+                let x = centerX + Math.cos(angle) * radius + (Math.random() - 0.5) * 100;
+                let y = centerY + Math.sin(angle) * radius + (Math.random() - 0.5) * 100;
+                x = Math.max(100, Math.min(this.width - 100, x));
+                y = Math.max(100, Math.min(this.height - 100, y));
+                const name = names[i % names.length];
+                this.nodes.push(new Node(i, new Point(x, y), name));
+            }
+        }
+        
+        _gauss(mean, stdev) {
+            let u = 0, v = 0;
+            while (u === 0) u = Math.random();
+            while (v === 0) v = Math.random();
+            const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+            return mean + z * stdev;
+        }
+        
+        _generateRoadNetwork() {
+            const edges = [];
+            for (let i = 0; i < this.nodes.length; i++) {
+                for (let j = i+1; j < this.nodes.length; j++) {
+                    const dist = this.nodes[i].position.distanceTo(this.nodes[j].position);
+                    edges.push({dist, u: i, v: j});
+                }
+            }
+            edges.sort((a,b) => a.dist - b.dist);
+            const parent = Array(this.nodes.length).fill().map((_,i)=>i);
+            const find = (x) => { while(parent[x]!==x) { parent[x]=parent[parent[x]]; x=parent[x]; } return x; };
+            const union = (x,y) => { let rx=find(x), ry=find(y); if(rx===ry) return false; parent[ry]=rx; return true; };
+            
+            const mstEdges = [];
+            for (const e of edges) {
+                if (union(e.u, e.v)) {
+                    mstEdges.push([e.u, e.v]);
+                    if (mstEdges.length === this.nodes.length-1) break;
+                }
+            }
+            
+            this.adjacency = {};
+            for (let i = 0; i < this.nodes.length; i++) this.adjacency[i] = [];
+            this.roads = [];
+            let roadId = 0;
+            for (const [u,v] of mstEdges) {
+                const curve = this._createRoadCurve(this.nodes[u].position, this.nodes[v].position);
+                const road = new Road(roadId++, u, v, curve);
+                this.roads.push(road);
+                this.adjacency[u].push(v);
+                this.adjacency[v].push(u);
+            }
+            // tambahan edge random 35%
+            for (let i = 0; i < this.nodes.length; i++) {
+                for (let j = i+1; j < this.nodes.length; j++) {
+                    if (!this.adjacency[i].includes(j) && Math.random() < 0.35) {
+                        const curve = this._createRoadCurve(this.nodes[i].position, this.nodes[j].position);
+                        const road = new Road(roadId++, i, j, curve);
+                        this.roads.push(road);
+                        this.adjacency[i].push(j);
+                        this.adjacency[j].push(i);
+                    }
+                }
+            }
+        }
+        
+        _createRoadCurve(start, end) {
+            if (Math.random() < 0.15) return new BezierCurve(start, start, end, end);
+            const dx = end.x - start.x, dy = end.y - start.y;
+            const length = Math.hypot(dx, dy);
+            if (length < 0.01) return new BezierCurve(start, start, end, end);
+            const nx = dx/length, ny = dy/length;
+            const px = -ny, py = nx;
+            let curveStrength = (Math.random() * 0.4 + 0.2) * length;
+            if (Math.random() < 0.5) curveStrength = -curveStrength;
+            const p1 = new Point(
+                start.x + nx * length * 0.35 + px * curveStrength * 0.4,
+                start.y + ny * length * 0.35 + py * curveStrength * 0.4
+            );
+            const p2 = new Point(
+                end.x - nx * length * 0.35 + px * curveStrength * 0.4,
+                end.y - ny * length * 0.35 + py * curveStrength * 0.4
+            );
+            return new BezierCurve(start, p1, p2, end);
+        }
+        
+        _validateConnectivity() {
+            const visited = new Set();
+            const stack = [0];
+            visited.add(0);
+            while(stack.length) {
+                const node = stack.pop();
+                for (const nb of this.adjacency[node] || []) {
+                    if (!visited.has(nb)) { visited.add(nb); stack.push(nb); }
+                }
+            }
+            if (visited.size !== this.nodes.length) {
+                this.roads = [];
+                this._generateRoadNetwork();
+                this._validateConnectivity();
+            }
+        }
+        
+        _generateBuildings() {
+            this.buildings = [];
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const n of this.nodes) {
+                minX = Math.min(minX, n.position.x); maxX = Math.max(maxX, n.position.x);
+                minY = Math.min(minY, n.position.y); maxY = Math.max(maxY, n.position.y);
+            }
+            minX -= 150; maxX += 150; minY -= 150; maxY += 150;
+            const blockSize = 45;
+            const cols = Math.floor((maxX - minX) / blockSize);
+            const rows = Math.floor((maxY - minY) / blockSize);
+            const centerX = (minX+maxX)/2, centerY = (minY+maxY)/2;
+            let buildingId = 0;
+            const namaBangunan = ['Rumah', 'Toko', 'Kantor', 'Apartemen', 'Ruko', 'Gedung', 'Taman', 'Danau'];
+            for (let i = 0; i < cols; i++) {
+                for (let j = 0; j < rows; j++) {
+                    const x = minX + i * blockSize + (Math.random() - 0.5) * 24;
+                    const y = minY + j * blockSize + (Math.random() - 0.5) * 24;
+                    const distToCenter = Math.hypot(x - centerX, y - centerY);
+                    let nearRoad = false;
+                    for (const road of this.roads) {
+                        for (let t of [0, 0.33, 0.66, 1.0]) {
+                            const pt = road.curve.pointAt(t);
+                            if (Math.hypot(pt.x - x, pt.y - y) < 40) { nearRoad = true; break; }
+                        }
+                        if (nearRoad) break;
+                    }
+                    if (!nearRoad && Math.random() < 0.6) {
+                        let btype = 'residential';
+                        if (distToCenter < 250) btype = 'commercial';
+                        else if (distToCenter < 500) btype = Math.random() < 0.7 ? 'residential' : (Math.random() < 0.5 ? 'commercial' : 'industrial');
+                        else btype = Math.random() < 0.6 ? 'residential' : (Math.random() < 0.5 ? 'park' : 'industrial');
+                        const w = 20 + Math.random() * 25;
+                        const h = 20 + Math.random() * 25;
+                        const name = namaBangunan[Math.floor(Math.random() * namaBangunan.length)];
+                        this.buildings.push(new Building(buildingId++, new Point(x, y), w, h, btype, `${name} ${buildingId}`));
+                    }
+                }
+            }
+        }
+    }
+
+    // ============================================================
+    // PATHFINDER (DIJKSTRA)
+    // ============================================================
+    class Pathfinder {
+        constructor(roads, adjacency) {
+            this.roads = roads;
+            this.adjacency = adjacency;
+            this.edgeMap = new Map();
+            for (const r of roads) {
+                this.edgeMap.set(`${r.fromNode},${r.toNode}`, r);
+                this.edgeMap.set(`${r.toNode},${r.fromNode}`, r);
+            }
+        }
+        
+        findShortestPath(start, end) {
+            if (start === end) return { pathNodes: [start], pathRoads: [], distance: 0 };
+            const dist = {}; const prev = {};
+            for (let node in this.adjacency) dist[node] = Infinity;
+            dist[start] = 0;
+            const pq = [[0, start]];
+            while (pq.length) {
+                pq.sort((a,b)=>a[0]-b[0]);
+                const [curDist, node] = pq.shift();
+                if (curDist > dist[node]) continue;
+                if (node == end) break;
+                for (const nb of this.adjacency[node] || []) {
+                    const road = this.edgeMap.get(`${node},${nb}`);
+                    if (road) {
+                        const nd = curDist + road.length;
+                        if (nd < dist[nb]) {
+                            dist[nb] = nd;
+                            prev[nb] = { node, road };
+                            pq.push([nd, nb]);
+                        }
+                    }
+                }
+            }
+            if (dist[end] === Infinity) return { pathNodes: [], pathRoads: [], distance: 0 };
+            const pathNodes = [], pathRoads = [];
+            let cur = end;
+            while (prev[cur]) {
+                pathNodes.unshift(cur);
+                pathRoads.unshift(prev[cur].road);
+                cur = prev[cur].node;
+            }
+            pathNodes.unshift(start);
+            return { pathNodes, pathRoads, distance: dist[end] };
+        }
+    }
+
+    // ============================================================
+    // VEHICLE ANIMATOR
+    // ============================================================
+    class VehicleAnimator {
+        constructor(pathRoads, vehicleType, routeColor) {
+            this.pathRoads = pathRoads;
+            this.vehicleType = vehicleType;
+            this.routeColor = routeColor;
+            this.totalLength = pathRoads.reduce((sum, r) => sum + r.length, 0);
+            for (let r of pathRoads) r.visitedColor = routeColor;
+            this.segmentStarts = [];
+            let cum = 0;
+            for (let r of pathRoads) { this.segmentStarts.push(cum); cum += r.length; }
+            this.currentDistance = 0;
+            this.visitedSegments = new Set();
+            this.speed = speedMap[vehicleType] || 150;
+            this.isMoving = false;
+            this.position = new Point(0,0);
+            this.rotation = 0;
+            this._updatePosition();
+        }
+        setSpeed(speed) { this.speed = Math.min(400, Math.max(30, speed)); }
+        update(dt) {
+            if (!this.isMoving) return;
+            const oldDist = this.currentDistance;
+            this.currentDistance += this.speed * dt;
+            this._markVisited(oldDist, this.currentDistance);
+            if (this.currentDistance >= this.totalLength) {
+                this.currentDistance = this.totalLength;
+                this.isMoving = false;
+                for (let r of this.pathRoads) r.isVisited = true;
+            }
+            this._updatePosition();
+        }
+        _markVisited(oldDist, newDist) {
+            for (let i=0; i<this.pathRoads.length; i++) {
+                const segStart = this.segmentStarts[i];
+                const segEnd = segStart + this.pathRoads[i].length;
+                if ((oldDist < segEnd && newDist > segStart) || (oldDist >= segStart && newDist <= segEnd)) {
+                    if (!this.visitedSegments.has(i)) {
+                        this.visitedSegments.add(i);
+                        this.pathRoads[i].isVisited = true;
+                    }
+                }
+            }
+        }
+        _updatePosition() {
+            if (!this.pathRoads.length) return;
+            if (this.currentDistance <= 0) {
+                this.position = this.pathRoads[0].curve.pointAt(0);
+                this.rotation = this._getAngle(this.pathRoads[0].curve, 0);
+                return;
+            }
+            if (this.currentDistance >= this.totalLength) {
+                const last = this.pathRoads[this.pathRoads.length-1].curve;
+                this.position = last.pointAt(1);
+                this.rotation = this._getAngle(last, 1);
+                return;
+            }
+            let segIdx = 0;
+            for (let i=0; i<this.segmentStarts.length; i++) {
+                if (i+1 < this.segmentStarts.length && this.currentDistance < this.segmentStarts[i+1]) { segIdx = i; break; }
+                else if (i+1 === this.segmentStarts.length) segIdx = i;
+            }
+            const road = this.pathRoads[segIdx];
+            const distInSeg = this.currentDistance - this.segmentStarts[segIdx];
+            let t = road.length > 0 ? distInSeg / road.length : 0;
+            t = Math.min(1, Math.max(0, t));
+            this.position = road.curve.pointAt(t);
+            this.rotation = this._getAngle(road.curve, t);
+        }
+        _getAngle(curve, t) {
+            const deriv = curve.derivativeAt(t);
+            return Math.atan2(deriv.y, deriv.x) * 180 / Math.PI;
+        }
+        start() { if (this.currentDistance < this.totalLength) this.isMoving = true; }
+        pause() { this.isMoving = false; }
+        reset() {
+            for (let r of this.pathRoads) { r.isVisited = false; r.visitedColor = null; }
+            this.currentDistance = 0;
+            this.visitedSegments.clear();
+            this.isMoving = false;
+            this._updatePosition();
+        }
+    }
+
+    // ============================================================
+    // MAP RENDERER + PAN/ZOOM
+    // ============================================================
+    class MapRenderer {
+        constructor(canvas, viewW, viewH, worldW, worldH) {
+            this.canvas = canvas;
+            this.ctx = canvas.getContext('2d');
+            this.viewW = viewW; this.viewH = viewH;
+            this.worldW = worldW; this.worldH = worldH;
+            this.zoom = 1.0;
+            this.offsetX = 0;
+            this.offsetY = 0;
+            this.centerMap();
+        }
+        centerMap() {
+            this.offsetX = (this.viewW - this.worldW * this.zoom) / 2;
+            this.offsetY = (this.viewH - this.worldH * this.zoom) / 2;
+        }
+        worldToScreen(p) {
+            return { x: p.x * this.zoom + this.offsetX, y: p.y * this.zoom + this.offsetY };
+        }
+        screenToWorld(sx, sy) {
+            return new Point((sx - this.offsetX) / this.zoom, (sy - this.offsetY) / this.zoom);
+        }
+        zoomAt(sx, sy, delta) {
+            const oldZoom = this.zoom;
+            let newZoom = this.zoom * delta;
+            newZoom = Math.min(3.5, Math.max(0.3, newZoom));
+            if (Math.abs(newZoom-oldZoom) < 0.01) return;
+            const worldBefore = this.screenToWorld(sx, sy);
+            this.zoom = newZoom;
+            this.offsetX = sx - worldBefore.x * this.zoom;
+            this.offsetY = sy - worldBefore.y * this.zoom;
+            this._clampOffset();
+        }
+        pan(dx, dy) { this.offsetX += dx; this.offsetY += dy; this._clampOffset(); }
+        _clampOffset() {
+            const minX = this.viewW - this.worldW * this.zoom;
+            const minY = this.viewH - this.worldH * this.zoom;
+            const margin = 200;
+            this.offsetX = Math.max(minX - margin, Math.min(0 + margin, this.offsetX));
+            this.offsetY = Math.max(minY - margin, Math.min(0 + margin, this.offsetY));
+        }
+        resetView() { this.zoom = 1.0; this.centerMap(); }
+        
+        drawBackground() { this.ctx.fillStyle = COLORS.background; this.ctx.fillRect(0,0,this.viewW,this.viewH); }
+        drawGrid() {
+            this.ctx.beginPath(); this.ctx.strokeStyle = COLORS.grid; this.ctx.lineWidth = 1;
+            const step = 100;
+            for (let x = 0; x <= this.worldW; x+=step) {
+                const p1 = this.worldToScreen(new Point(x,0)), p2 = this.worldToScreen(new Point(x,this.worldH));
+                this.ctx.beginPath(); this.ctx.moveTo(p1.x,p1.y); this.ctx.lineTo(p2.x,p2.y); this.ctx.stroke();
+            }
+            for (let y = 0; y <= this.worldH; y+=step) {
+                const p1 = this.worldToScreen(new Point(0,y)), p2 = this.worldToScreen(new Point(this.worldW,y));
+                this.ctx.beginPath(); this.ctx.moveTo(p1.x,p1.y); this.ctx.lineTo(p2.x,p2.y); this.ctx.stroke();
+            }
+            // border
+            this.ctx.beginPath(); this.ctx.strokeStyle = '#999'; this.ctx.setLineDash([5,5]);
+            const tl = this.worldToScreen(new Point(0,0)), tr = this.worldToScreen(new Point(this.worldW,0));
+            const bl = this.worldToScreen(new Point(0,this.worldH)), br = this.worldToScreen(new Point(this.worldW,this.worldH));
+            this.ctx.strokeRect(tl.x, tl.y, tr.x-tl.x, bl.y-tl.y);
+            this.ctx.setLineDash([]);
+        }
+        drawBuilding(b) {
+            const c = this.worldToScreen(b.center);
+            const w = b.width * this.zoom, h = b.height * this.zoom;
+            const colorMap = { residential: COLORS.residential, commercial: COLORS.commercial, industrial: COLORS.industrial, park: COLORS.park, water: COLORS.water };
+            const fill = colorMap[b.buildingType] || COLORS.residential;
+            this.ctx.fillStyle = fill; this.ctx.strokeStyle = '#D0C8B8'; this.ctx.lineWidth = 1;
+            this.ctx.fillRect(c.x - w/2, c.y - h/2, w, h);
+            this.ctx.strokeRect(c.x - w/2, c.y - h/2, w, h);
+        }
+        drawRoad(road, isHighlight) {
+            const points = road.curve.getPoints(40);
+            const scr = points.map(p=>this.worldToScreen(p));
+            this.ctx.beginPath();
+            for(let i=0;i<scr.length;i++) { if(i===0) this.ctx.moveTo(scr[i].x, scr[i].y); else this.ctx.lineTo(scr[i].x, scr[i].y); }
+            if (road.isVisited && road.visitedColor) {
+                this.ctx.lineWidth = 8*this.zoom; this.ctx.strokeStyle = road.visitedColor; this.ctx.stroke();
+                this.ctx.lineWidth = 6*this.zoom; this.ctx.strokeStyle = 'white'; this.ctx.stroke();
+            } else if (isHighlight) {
+                this.ctx.lineWidth = 8*this.zoom; this.ctx.strokeStyle = COLORS.road_highlight; this.ctx.stroke();
+                this.ctx.lineWidth = 6*this.zoom; this.ctx.strokeStyle = 'white'; this.ctx.stroke();
+            } else {
+                this.ctx.lineWidth = 6*this.zoom; this.ctx.strokeStyle = COLORS.road_outline; this.ctx.stroke();
+                this.ctx.lineWidth = 4*this.zoom; this.ctx.strokeStyle = COLORS.road; this.ctx.stroke();
+            }
+        }
+        drawNode(node, isStart, isEnd) {
+            const pos = this.worldToScreen(node.position);
+            if (isStart) {
+                const r = 12*this.zoom;
+                this.ctx.fillStyle = COLORS.node_start; this.ctx.shadowBlur = 0;
+                this.ctx.beginPath(); this.ctx.arc(pos.x, pos.y, r, 0, 2*Math.PI); this.ctx.fill();
+                this.ctx.fillStyle = 'white'; this.ctx.font = `bold ${9*this.zoom}px Arial`; this.ctx.textAlign='center'; this.ctx.textBaseline='middle';
+                this.ctx.fillText('S', pos.x, pos.y);
+            } else if (isEnd) {
+                const r = 12*this.zoom;
+                this.ctx.fillStyle = COLORS.node_end;
+                this.ctx.beginPath(); this.ctx.arc(pos.x, pos.y, r, 0, 2*Math.PI); this.ctx.fill();
+                this.ctx.fillStyle = 'white'; this.ctx.font = `bold ${9*this.zoom}px Arial`; this.ctx.fillText('G', pos.x, pos.y);
+            } else {
+                const r = 5*this.zoom;
+                this.ctx.fillStyle = '#888';
+                this.ctx.beginPath(); this.ctx.arc(pos.x, pos.y, r, 0, 2*Math.PI); this.ctx.fill();
+            }
+        }
+        drawVehicle(vehicleType, position, rotation) {
+            const pos = this.worldToScreen(position);
+            const size = 14 * this.zoom;
+            const angleRad = rotation * Math.PI/180;
+            const cos = Math.cos(angleRad), sin = Math.sin(angleRad);
+            const colorMap = { CAR: COLORS.vehicle_car, MOTORCYCLE: COLORS.vehicle_motorcycle, BICYCLE: COLORS.vehicle_bicycle, TRUCK: COLORS.vehicle_truck };
+            const mainColor = colorMap[vehicleType] || COLORS.vehicle_car;
+            const w = size, h = size*0.65;
+            const corners = [[-w/2, -h/2], [w/2, -h/2], [w/2, h/2], [-w/2, h/2]];
+            const rotated = corners.map(([cx,cy]) => ({ x: pos.x + cx*cos - cy*sin, y: pos.y + cx*sin + cy*cos }));
+            this.ctx.beginPath(); this.ctx.moveTo(rotated[0].x, rotated[0].y);
+            for(let i=1;i<rotated.length;i++) this.ctx.lineTo(rotated[i].x, rotated[i].y);
+            this.ctx.closePath(); this.ctx.fillStyle = mainColor; this.ctx.fill(); this.ctx.strokeStyle = '#0D5BBF'; this.ctx.lineWidth=2; this.ctx.stroke();
+            const fx = pos.x + (w/2)*cos, fy = pos.y + (w/2)*sin;
+            this.ctx.fillStyle = '#FFD700'; this.ctx.beginPath(); this.ctx.arc(fx, fy, 2, 0, 2*Math.PI); this.ctx.fill();
+        }
+    }
+
+    // ============================================================
+    // APLIKASI UTAMA
+    // ============================================================
+    let appState = {
+        nodes: [], roads: [], buildings: [], adjacency: {},
+        startNodeId: null, endNodeId: null,
+        highlightedRoads: [],
+        pathfinder: null, animator: null,
+        renderer: null, selectMode: null,
+        currentRouteColorIdx: 0,
+        lastTimestamp: 0
+    };
+
+    const canvas = document.getElementById('mapCanvas');
+    let renderer = null;
+    let animFrame = null;
+
+    function resizeCanvas() {
+        const container = document.querySelector('.canvas-container');
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        if (renderer) {
+            renderer.viewW = canvas.width; renderer.viewH = canvas.height;
+            renderer._clampOffset();
+            redraw();
+        }
+    }
+
+    function redraw() {
+        if (!renderer) return;
+        renderer.drawBackground();
+        renderer.drawGrid();
+        for (let b of appState.buildings) renderer.drawBuilding(b);
+        for (let r of appState.roads) {
+            const isHigh = appState.highlightedRoads.includes(r);
+            renderer.drawRoad(r, isHigh);
+        }
+        for (let n of appState.nodes) {
+            renderer.drawNode(n, n.id === appState.startNodeId, n.id === appState.endNodeId);
+        }
+        if (appState.animator) {
+            const vtype = document.getElementById('vehicleType').value;
+            renderer.drawVehicle(vtype, appState.animator.position, appState.animator.rotation);
+        }
+    }
+
+    function calculateRoute() {
+        if (appState.startNodeId !== null && appState.endNodeId !== null && appState.pathfinder) {
+            const { pathRoads, distance } = appState.pathfinder.findShortestPath(appState.startNodeId, appState.endNodeId);
+            appState.highlightedRoads = pathRoads;
+            if (pathRoads.length) {
+                const color = ROUTE_COLORS[appState.currentRouteColorIdx % ROUTE_COLORS.length];
+                appState.currentRouteColorIdx++;
+                const vtype = document.getElementById('vehicleType').value;
+                appState.animator = new VehicleAnimator(pathRoads, vtype, color);
+                const speedVal = parseFloat(document.getElementById('speedSlider').value);
+                appState.animator.setSpeed(speedVal);
+                document.getElementById('routeInfo').innerHTML = `${appState.nodes[appState.startNodeId]?.name || 'Start'} → ${appState.nodes[appState.endNodeId]?.name || 'Goal'} | ${distance.toFixed(0)}m`;
+                document.getElementById('statusMsg').innerHTML = '✅ Rute ditemukan!';
+                document.getElementById('btnPlayPause').innerHTML = '▶️ Start';
+            } else {
+                document.getElementById('routeInfo').innerHTML = '❌ Tidak ada rute';
+            }
+            redraw();
+        }
+    }
+
+    function generateMap() {
+        document.getElementById('statusMsg').innerHTML = '⏳ Generating map...';
+        setTimeout(() => {
+            const gen = new ProceduralMapGenerator(1800, 1800, 14);
+            const { nodes, roads, adjacency, buildings } = gen.generate();
+            appState.nodes = nodes; appState.roads = roads; appState.adjacency = adjacency; appState.buildings = buildings;
+            appState.pathfinder = new Pathfinder(roads, adjacency);
+            appState.startNodeId = 0;
+            appState.endNodeId = nodes.length-1;
+            appState.highlightedRoads = [];
+            appState.animator = null;
+            if (renderer) { renderer.worldW = 1800; renderer.worldH = 1800; renderer.resetView(); }
+            calculateRoute();
+            document.getElementById('statusMsg').innerHTML = `✅ Map ready | ${nodes.length} simpul | ${roads.length} jalan`;
+            redraw();
+        }, 20);
+    }
+
+    function randomRoute() {
+        if (appState.nodes.length >= 2) {
+            const indices = [...Array(appState.nodes.length).keys()];
+            for (let i=indices.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1)); [indices[i],indices[j]]=[indices[j],indices[i]]; }
+            appState.startNodeId = indices[0];
+            appState.endNodeId = indices[1];
+            calculateRoute();
+            redraw();
+        }
+    }
+
+    function resetRouteColors() {
+        for (let r of appState.roads) { r.isVisited = false; r.visitedColor = null; }
+        if (appState.animator) appState.animator.reset();
+        redraw();
+        document.getElementById('statusMsg').innerHTML = '✅ Semua warna rute direset';
+    }
+
+    function toggleAnimation() {
+        if (!appState.animator) { alert('Tidak ada rute! Atur start dan goal terlebih dahulu.'); return; }
+        if (appState.animator.isMoving) {
+            appState.animator.pause();
+            document.getElementById('btnPlayPause').innerHTML = '▶️ Start';
+            document.getElementById('statusMsg').innerHTML = '⏸️ Animasi dijeda';
+        } else {
+            if (appState.animator.currentDistance >= appState.animator.totalLength) appState.animator.reset();
+            appState.animator.start();
+            document.getElementById('btnPlayPause').innerHTML = '⏸️ Pause';
+            document.getElementById('statusMsg').innerHTML = '🚗 Kendaraan bergerak...';
+        }
+    }
+    function resetAnimation() { if(appState.animator) { appState.animator.reset(); redraw(); document.getElementById('btnPlayPause').innerHTML='▶️ Start'; } }
+
+    // event handlers
+    function handleCanvasClick(e) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
+        const mouseX = (e.clientX - rect.left) * scaleX, mouseY = (e.clientY - rect.top) * scaleY;
+        const world = renderer.screenToWorld(mouseX, mouseY);
+        if (appState.selectMode) {
+            let closest = null, minDist = 30 / renderer.zoom;
+            for (let node of appState.nodes) {
+                const d = node.position.distanceTo(world);
+                if (d < minDist) { minDist = d; closest = node; }
+            }
+            if (closest) {
+                if (appState.selectMode === 'start') { appState.startNodeId = closest.id; document.getElementById('statusMsg').innerHTML = `✅ START di ${closest.name}`; }
+                else { appState.endNodeId = closest.id; document.getElementById('statusMsg').innerHTML = `✅ GOAL di ${closest.name}`; }
+                appState.selectMode = null;
+                calculateRoute();
+                redraw();
+            } else { document.getElementById('statusMsg').innerHTML = '❌ Klik lebih dekat ke simpul'; }
+        }
+    }
+
+    // drag & zoom
+    let isDragging = false, dragStart = {x:0,y:0}, offsetStart = {x:0,y:0};
+    function onMouseDown(e) {
+        if (appState.selectMode) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
+        const mouseX = (e.clientX - rect.left) * scaleX;
+        const mouseY = (e.clientY - rect.top) * scaleY;
+        isDragging = true;
+        dragStart = {x: mouseX, y: mouseY};
+        offsetStart = {x: renderer.offsetX, y: renderer.offsetY};
+        canvas.style.cursor = 'grabbing';
+    }
+    function onMouseMove(e) {
+        if (isDragging && !appState.selectMode) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
+            const mouseX = (e.clientX - rect.left) * scaleX;
+            const mouseY = (e.clientY - rect.top) * scaleY;
+            const dx = mouseX - dragStart.x;
+            const dy = mouseY - dragStart.y;
+            renderer.offsetX = offsetStart.x + dx;
+            renderer.offsetY = offsetStart.y + dy;
+            renderer._clampOffset();
+            redraw();
+        }
+        // update coord label
+        const rect = canvas.getBoundingClientRect();
+        const scaleX2 = canvas.width/rect.width, scaleY2 = canvas.height/rect.height;
+        const mx = (e.clientX - rect.left) * scaleX2, my = (e.clientY - rect.top) * scaleY2;
+        const world = renderer.screenToWorld(mx, my);
+        if (world.x>=0 && world.x<=1800 && world.y>=0 && world.y<=1800) document.getElementById('coordLabel').innerHTML = `📍 X:${world.x.toFixed(0)} Y:${world.y.toFixed(0)}`;
+        else document.getElementById('coordLabel').innerHTML = `📍 Di luar peta`;
+    }
+    function onMouseUp() { isDragging = false; canvas.style.cursor = 'grab'; }
+    function onWheel(e) {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
+        const mouseX = (e.clientX - rect.left) * scaleX, mouseY = (e.clientY - rect.top) * scaleY;
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        renderer.zoomAt(mouseX, mouseY, delta);
+        redraw();
+    }
+
+    function animate(timestamp) {
+        if (!appState.animator) { redraw(); requestAnimationFrame(animate); return; }
+        if (!appState.lastTimestamp) { appState.lastTimestamp = timestamp; requestAnimationFrame(animate); return; }
+        let dt = Math.min(0.033, (timestamp - appState.lastTimestamp) / 1000);
+        if (dt <= 0) dt = 0.016;
+        appState.lastTimestamp = timestamp;
+        if (appState.animator.isMoving) {
+            appState.animator.update(dt);
+            redraw();
+            const prog = (appState.animator.currentDistance / appState.animator.totalLength)*100;
+            document.getElementById('statusMsg').innerHTML = `🚗 Bergerak... ${prog.toFixed(1)}%`;
+            if (appState.animator.currentDistance >= appState.animator.totalLength) {
+                document.getElementById('statusMsg').innerHTML = '✅ SAMPAI DI TUJUAN!';
+                document.getElementById('btnPlayPause').innerHTML = '▶️ Start';
+            }
+        } else { redraw(); }
+        requestAnimationFrame(animate);
+    }
+
+    function initUI() {
+        document.getElementById('btnGenerate').onclick = generateMap;
+        document.getElementById('btnRandomRoute').onclick = randomRoute;
+        document.getElementById('btnSetStart').onclick = () => { appState.selectMode = 'start'; document.getElementById('statusMsg').innerHTML = '📍 Klik pada SIMPUL untuk START'; };
+        document.getElementById('btnSetGoal').onclick = () => { appState.selectMode = 'end'; document.getElementById('statusMsg').innerHTML = '🏁 Klik pada SIMPUL untuk GOAL'; };
+        document.getElementById('btnResetColors').onclick = resetRouteColors;
+        document.getElementById('btnZoomIn').onclick = () => { renderer.zoomAt(canvas.width/2, canvas.height/2, 1.2); redraw(); };
+        document.getElementById('btnZoomOut').onclick = () => { renderer.zoomAt(canvas.width/2, canvas.height/2, 0.8); redraw(); };
+        document.getElementById('btnResetView').onclick = () => { renderer.resetView(); redraw(); };
+        document.getElementById('btnPlayPause').onclick = toggleAnimation;
+        document.getElementById('btnResetAnim').onclick = resetAnimation;
+        const speedSlider = document.getElementById('speedSlider');
+        const speedVal = document.getElementById('speedValue');
+        speedSlider.oninput = (e) => { const v = e.target.value; speedVal.innerText = v; if(appState.animator) appState.animator.setSpeed(parseFloat(v)); };
+        document.getElementById('vehicleType').onchange = () => { if(appState.animator) { appState.animator.vehicleType = document.getElementById('vehicleType').value; } };
+        canvas.addEventListener('mousedown', onMouseDown);
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+        canvas.addEventListener('wheel', onWheel, {passive:false});
+        canvas.addEventListener('click', handleCanvasClick);
+        window.addEventListener('resize', () => { resizeCanvas(); redraw(); });
+        canvas.style.cursor = 'grab';
+    }
+
+    function startApp() {
+        resizeCanvas();
+        renderer = new MapRenderer(canvas, canvas.width, canvas.height, 1800, 1800);
+        appState.renderer = renderer;
+        initUI();
+        generateMap();
+        requestAnimationFrame(animate);
+    }
+    startApp();
+</script>
+</body>
+</html>
